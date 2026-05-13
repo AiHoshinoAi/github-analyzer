@@ -21,3 +21,8 @@ export async function analyzeRepository(url: string): Promise<AnalysisResult> {
 
   return (await response.json()) as AnalysisResult;
 }
+
+export function fetchScoreComment(url: string): EventSource {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+  return new EventSource(`${baseUrl}/api/score-comment?url=${encodeURIComponent(url)}`);
+}
