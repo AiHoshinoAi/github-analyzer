@@ -19,8 +19,8 @@ import {
   Users,
   Eye
 } from "lucide-vue-next";
-import { computed, ref } from "vue";
-import { analyzeRepository } from "./api";
+import { computed, onUnmounted, ref } from "vue";
+import { analyzeRepository, fetchScoreComment } from "./api";
 import BaseChart from "./components/BaseChart.vue";
 import type { AnalysisResult } from "./types";
 
@@ -28,6 +28,14 @@ const repositoryUrl = ref("https://github.com/vuejs/core");
 const loading = ref(false);
 const error = ref("");
 const result = ref<AnalysisResult | null>(null);
+const aiComment = ref("");
+const aiCommentLoading = ref(false);
+const aiCommentError = ref(false);
+const scoreCommentSource = ref<EventSource | null>(null);
+
+onUnmounted(() => {
+  scoreCommentSource.value?.close();
+});
 
 const metricCards = computed(() => {
   const metrics = result.value?.metrics;
@@ -205,11 +213,43 @@ async function runAnalyze() {
 
   try {
     result.value = await analyzeRepository(repositoryUrl.value);
+    // 分析完成后，异步获取 AI 评语
+    connectScoreComment(repositoryUrl.value);
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : "分析失败，请稍后重试。";
   } finally {
     loading.value = false;
   }
+}
+
+function connectScoreComment(url: string) {
+  aiCommentLoading.value = true;
+  aiCommentError.value = false;
+  aiComment.value = "";
+
+  scoreCommentSource.value?.close();
+  const eventSource = fetchScoreComment(url);
+  scoreCommentSource.value = eventSource;
+
+  eventSource.onmessage = (event) => {
+    const data = event.data;
+    if (data.startsWith("[ERROR]")) {
+      aiCommentError.value = true;
+      aiCommentLoading.value = false;
+      aiComment.value = result.value?.score.comment ?? "评语获取失败";
+    } else {
+      aiComment.value += data;
+      aiCommentLoading.value = false;
+    }
+  };
+
+  eventSource.onerror = () => {
+    aiCommentError.value = true;
+    aiCommentLoading.value = false;
+    aiComment.value = result.value?.score.comment ?? "评语获取失败，请检查网络";
+    eventSource.close();
+    scoreCommentSource.value = null;
+  };
 }
 
 function formatNumber(value: number): string {
@@ -444,7 +484,22 @@ void runAnalyze();
           </div>
           <Bot class="size-5 text-brand" />
         </div>
-        <p class="mt-4 whitespace-pre-line text-sm leading-7 text-slate-700">{{ result.score.comment }}</p>
+
+        <!-- AI 评语加载状态 -->
+        <div v-if="aiCommentLoading" class="mt-4 flex items-center gap-3 text-sm text-muted">
+          <div class="h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent"></div>
+          <span>AI 评语生成中...</span>
+        </div>
+
+        <!-- 错误状态 -->
+        <div v-if="aiCommentError" class="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <AlertCircle class="mt-0.5 size-4 shrink-0" />
+          <span>AI 评语服务暂时不可用，已使用规则评分替代</span>
+        </div>
+
+        <!-- 评语内容 -->
+        <p v-if="aiComment" class="mt-4 whitespace-pre-line text-sm leading-7 text-slate-700">{{ aiComment }}</p>
+        <p v-else-if="!aiCommentLoading" class="mt-4 whitespace-pre-line text-sm leading-7 text-slate-700">{{ result.score.comment }}</p>
       </section>
     </main>
   </div>
