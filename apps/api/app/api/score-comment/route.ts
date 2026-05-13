@@ -52,11 +52,13 @@ export async function GET(request: Request) {
           return;
         }
 
-        const chunks = content.match(/.{1,32}/gs) ?? [content];
-        for (const chunk of chunks) {
+        // 按句子分块，每块约 50 字，避免切断多字节字符
+        const sentences = splitByLength(content, 50);
+        for (const sentence of sentences) {
           if (aborted) break;
-          controller.enqueue(encoder.encode(`data: ${chunk.replace(/\n/g, "\\n")}\n\n`));
-          await sleep(15);
+          const safe = sentence.replace(/\n/g, " ").replace(/\r/g, "");
+          controller.enqueue(encoder.encode(`data: ${safe}\n\n`));
+          await sleep(20);
         }
 
         controller.enqueue(encoder.encode("\n"));
@@ -85,4 +87,27 @@ export async function GET(request: Request) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 按字数分块，避免切断多字节字符（如中文）
+function splitByLength(text: string, maxLen: number): string[] {
+  if (maxLen <= 0) return [text];
+
+  const result: string[] = [];
+  let current = "";
+
+  for (const char of text) {
+    // 中文字符占 2 个"宽度"，英文字符占 1 个
+    const charWidth = char.charCodeAt(0) > 127 ? 2 : 1;
+
+    if (current.length + charWidth > maxLen) {
+      if (current) result.push(current);
+      current = char;
+    } else {
+      current += char;
+    }
+  }
+
+  if (current) result.push(current);
+  return result;
 }
