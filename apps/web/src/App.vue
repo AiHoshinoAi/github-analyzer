@@ -232,24 +232,48 @@ function connectScoreComment(url: string) {
   scoreCommentSource.value = eventSource;
 
   eventSource.onmessage = (event) => {
+    if (scoreCommentSource.value !== eventSource) {
+      return;
+    }
+
     const data = event.data;
     if (data.startsWith("[ERROR]")) {
       aiCommentError.value = true;
       aiCommentLoading.value = false;
       aiComment.value = result.value?.score.comment ?? "评语获取失败";
+      closeScoreCommentSource(eventSource);
     } else {
       aiComment.value += data;
       aiCommentLoading.value = false;
     }
   };
 
+  eventSource.addEventListener("done", () => {
+    if (scoreCommentSource.value !== eventSource) {
+      return;
+    }
+
+    aiCommentLoading.value = false;
+    closeScoreCommentSource(eventSource);
+  });
+
   eventSource.onerror = () => {
+    if (scoreCommentSource.value !== eventSource) {
+      return;
+    }
+
     aiCommentError.value = true;
     aiCommentLoading.value = false;
     aiComment.value = result.value?.score.comment ?? "评语获取失败，请检查网络";
-    eventSource.close();
-    scoreCommentSource.value = null;
+    closeScoreCommentSource(eventSource);
   };
+}
+
+function closeScoreCommentSource(eventSource: EventSource) {
+  eventSource.close();
+  if (scoreCommentSource.value === eventSource) {
+    scoreCommentSource.value = null;
+  }
 }
 
 function formatNumber(value: number): string {
@@ -365,7 +389,7 @@ void runAnalyze();
               <h2 class="text-lg font-semibold text-ink">项目评分</h2>
             </div>
             <span class="rounded-md border border-line px-2 py-1 text-xs font-medium text-muted">
-              {{ result.score.source === "llm" ? "qwen3.6-plus" : "规则评分" }}
+              {{ result.score.source === "cloud" ? result.score.model ?? "云端 API" : "规则评分" }}
             </span>
           </div>
 

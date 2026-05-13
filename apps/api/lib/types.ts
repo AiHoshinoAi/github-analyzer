@@ -71,7 +71,8 @@ export type ScoreResult = {
   total: number;
   dimensions: ScoreDimensions;
   comment: string;
-  source: "llm" | "rules";
+  source: "cloud" | "rules";
+  model: string | null;
 };
 
 export type AnalysisResult = {

@@ -1,4 +1,5 @@
 import type { AnalysisResult, HealthMetrics, Metrics, RepositoryInfo, ScoreDimensions, ScoreResult } from "./types";
+import { createTimeoutSignal, getAiConfig, requestAiText } from "./ai";
 
 const weights = {
   activity: 0.25,
@@ -21,7 +22,8 @@ export async function scoreRepository(input: ScoringInput): Promise<ScoreResult>
       total: ruleScore,
       dimensions,
       comment: fallbackComment,
-      source: "rules"
+      source: "rules",
+      model: null
     };
   }
 
@@ -29,7 +31,8 @@ export async function scoreRepository(input: ScoringInput): Promise<ScoreResult>
     total: llmResult.score ?? ruleScore,
     dimensions,
     comment: llmResult.comment,
-    source: "llm"
+    source: "cloud",
+    model: llmResult.model
   };
 }
 
@@ -124,63 +127,42 @@ function buildRuleComment(repository: RepositoryInfo, dimensions: ScoreDimension
 type LlmResult = {
   score: number | null;
   comment: string;
+  model: string;
 };
 
 async function generateLlmComment(input: ScoringInput, dimensions: ScoreDimensions, ruleScore: number): Promise<LlmResult | null> {
-  const baseUrl = process.env.LLM_BASE_URL;
-  if (!baseUrl) {
+  const config = getAiConfig();
+  if (!config) {
     return null;
   }
 
-  const controller = new AbortController();
-  const timeout = Number.parseInt(process.env.LLM_TIMEOUT_MS ?? "12000", 10);
-  const timer = setTimeout(() => controller.abort(), Number.isFinite(timeout) ? timeout : 12000);
+  const timeout = createTimeoutSignal(config.timeoutMs);
 
   try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(process.env.LLM_API_KEY ? { Authorization: `Bearer ${process.env.LLM_API_KEY}` } : {})
-      },
-      body: JSON.stringify({
-        model: process.env.LLM_MODEL ?? "qwen3.6-plus",
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content:
-              "你是一位专业的开源项目分析师。请基于给定 GitHub 仓库数据输出 JSON，不要输出 Markdown。格式：{\"score\": 数字, \"comment\": \"中文评语\"}。"
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              repository: input.repository,
-              metrics: input.metrics,
-              health: input.health,
-              dimensions,
-              ruleScore,
-              languageTop5: input.languages.slice(0, 5),
-              contributorTop5: input.contributors.slice(0, 5)
-            })
-          }
-        ]
-      }),
-      signal: controller.signal
-    });
+    const content = await requestAiText(
+      config,
+      [
+        {
+          role: "system",
+          content:
+            "你是一位专业的开源项目分析师。请基于给定 GitHub 仓库数据输出 JSON，不要输出 Markdown。格式：{\"score\": 数字, \"comment\": \"中文评语\"}。"
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            repository: input.repository,
+            metrics: input.metrics,
+            health: input.health,
+            dimensions,
+            ruleScore,
+            languageTop5: input.languages.slice(0, 5),
+            contributorTop5: input.contributors.slice(0, 5)
+          })
+        }
+      ],
+      timeout.signal
+    );
 
-    if (!response.ok) {
-      return null;
-    }
-
-    const payload = (await response.json()) as {
-      choices?: Array<{
-        message?: {
-          content?: string;
-        };
-      }>;
-    };
-    const content = payload.choices?.[0]?.message?.content?.trim();
     if (!content) {
       return null;
     }
@@ -189,13 +171,17 @@ async function generateLlmComment(input: ScoringInput, dimensions: ScoreDimensio
     if (!parsed.comment) {
       return {
         score: null,
-        comment: content
+        comment: content,
+        model: config.model
       };
     }
 
-    return parsed;
+    return {
+      ...parsed,
+      model: config.model
+    };
   } finally {
-    clearTimeout(timer);
+    timeout.clear();
   }
 }
 
@@ -212,7 +198,8 @@ function parseLlmJson(content: string): LlmResult {
 
     return {
       score,
-      comment
+      comment,
+      model: ""
     };
   } catch {
     const scoreMatch = content.match(/(?:评分|score)\D{0,8}(\d{1,3})/i);
@@ -220,7 +207,8 @@ function parseLlmJson(content: string): LlmResult {
 
     return {
       score,
-      comment: content
+      comment: content,
+      model: ""
     };
   }
 }

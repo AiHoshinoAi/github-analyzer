@@ -1,37 +1,87 @@
 import { NextResponse } from "next/server";
-import { createTimeoutSignal, getAiConfig, requestAiText } from "../../../lib/ai";
+import { createTimeoutSignal, getAiConfig, requestAiTextStream } from "../../../lib/ai";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type CombinedSignal = {
+  signal: AbortSignal;
+  clear: () => void;
+};
+
+export async function OPTIONS() {
+  return withCors(new NextResponse(null, { status: 204 }));
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const url = searchParams.get("url");
 
   if (!url) {
-    return NextResponse.json({ error: "缺少 url 参数" }, { status: 400 });
+    return withCors(NextResponse.json({ error: "缺少 url 参数" }, { status: 400 }));
   }
 
   if (!url.includes("github.com")) {
-    return NextResponse.json({ error: "无效的 GitHub URL" }, { status: 400 });
+    return withCors(NextResponse.json({ error: "无效的 GitHub URL" }, { status: 400 }));
   }
 
   const encoder = new TextEncoder();
-  let aborted = false;
+  const streamAbort = new AbortController();
+  let streamClosed = false;
 
-  const stream = new ReadableStream({
+  const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      try {
-        const config = getAiConfig();
-        if (!config) {
-          controller.enqueue(encoder.encode("data: [ERROR] 未配置 AI_API_BASE_URL 或 AI_API_KEY\n\n"));
-          controller.close();
+      let timeout: ReturnType<typeof createTimeoutSignal> | null = null;
+      let upstreamAbort: CombinedSignal | null = null;
+
+      const send = (payload: string, event?: string) => {
+        if (streamClosed || request.signal.aborted || streamAbort.signal.aborted) {
+          return false;
+        }
+
+        try {
+          controller.enqueue(encoder.encode(formatSse(payload, event)));
+          return true;
+        } catch {
+          streamClosed = true;
+          streamAbort.abort();
+          return false;
+        }
+      };
+
+      const close = () => {
+        if (streamClosed) {
           return;
         }
 
-        controller.enqueue(encoder.encode("data: 正在分析项目...\n\n"));
+        streamClosed = true;
 
-        const timeout = createTimeoutSignal(Math.max(config.timeoutMs, 30000));
-        const content = await requestAiText(
+        try {
+          controller.close();
+        } catch {
+          // The client may already have closed the EventSource.
+        }
+      };
+
+      try {
+        const config = getAiConfig();
+        if (!config) {
+          send("[ERROR] 未配置 AI_API_BASE_URL 或 AI_API_KEY");
+          send("[DONE]", "done");
+          close();
+          return;
+        }
+
+        if (!sendComment("connected", controller, encoder)) {
+          return;
+        }
+
+        timeout = createTimeoutSignal(Math.max(config.timeoutMs, 30000));
+        upstreamAbort = combineAbortSignals([request.signal, streamAbort.signal, timeout.signal]);
+
+        let hasContent = false;
+
+        for await (const chunk of requestAiTextStream(
           config,
           [
             {
@@ -43,71 +93,114 @@ export async function GET(request: Request) {
               content: `请分析 GitHub 仓库: ${url}`
             }
           ],
-          timeout.signal
-        ).finally(timeout.clear);
+          upstreamAbort.signal
+        )) {
+          hasContent = true;
 
-        if (!content) {
-          controller.enqueue(encoder.encode("data: [ERROR] 云端 AI 请求失败\n\n"));
-          controller.close();
+          if (!send(chunk)) {
+            return;
+          }
+        }
+
+        if (!hasContent) {
+          send("[ERROR] 云端 AI 未返回流式内容");
+        }
+
+        send("[DONE]", "done");
+      } catch (error) {
+        const clientClosed = request.signal.aborted || streamAbort.signal.aborted;
+        const timedOut = timeout?.signal.aborted && !clientClosed;
+
+        if (clientClosed) {
           return;
         }
 
-        // 按句子分块，每块约 50 字，避免切断多字节字符
-        const sentences = splitByLength(content, 50);
-        for (const sentence of sentences) {
-          if (aborted) break;
-          const safe = sentence.replace(/\n/g, " ").replace(/\r/g, "");
-          controller.enqueue(encoder.encode(`data: ${safe}\n\n`));
-          await sleep(20);
+        if (timedOut || isAbortError(error)) {
+          send("[ERROR] AI 评语生成超时");
+          send("[DONE]", "done");
+          return;
         }
 
-        controller.enqueue(encoder.encode("\n"));
-        controller.close();
-      } catch (error) {
         console.error("SSE error:", error);
-        controller.enqueue(encoder.encode("data: [ERROR] 获取评语失败\n\n"));
-        controller.close();
+        send("[ERROR] 获取评语失败");
+        send("[DONE]", "done");
+      } finally {
+        upstreamAbort?.clear();
+        timeout?.clear();
+        close();
       }
     },
     cancel() {
-      aborted = true;
+      streamAbort.abort();
+      streamClosed = true;
     }
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-      "Access-Control-Allow-Origin": "*"
-    }
-  });
+  return withCors(
+    new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no"
+      }
+    })
+  );
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function withCors(response: Response) {
+  response.headers.set("Access-Control-Allow-Origin", "*");
+  response.headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+  response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  return response;
 }
 
-// 按字数分块，避免切断多字节字符（如中文）
-function splitByLength(text: string, maxLen: number): string[] {
-  if (maxLen <= 0) return [text];
+function formatSse(payload: string, event?: string): string {
+  const normalized = payload.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n").map((line) => `data: ${line}`);
 
-  const result: string[] = [];
-  let current = "";
+  return `${event ? `event: ${event}\n` : ""}${lines.join("\n")}\n\n`;
+}
 
-  for (const char of text) {
-    // 中文字符占 2 个"宽度"，英文字符占 1 个
-    const charWidth = char.charCodeAt(0) > 127 ? 2 : 1;
+function sendComment(comment: string, controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder) {
+  try {
+    controller.enqueue(encoder.encode(`: ${comment}\n\n`));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-    if (current.length + charWidth > maxLen) {
-      if (current) result.push(current);
-      current = char;
-    } else {
-      current += char;
+function combineAbortSignals(signals: AbortSignal[]): CombinedSignal {
+  const controller = new AbortController();
+  const activeSignals: AbortSignal[] = [];
+
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort();
     }
+  };
+
+  for (const signal of signals) {
+    if (signal.aborted) {
+      abort();
+      break;
+    }
+
+    signal.addEventListener("abort", abort, { once: true });
+    activeSignals.push(signal);
   }
 
-  if (current) result.push(current);
-  return result;
+  return {
+    signal: controller.signal,
+    clear: () => {
+      for (const signal of activeSignals) {
+        signal.removeEventListener("abort", abort);
+      }
+    }
+  };
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
 }

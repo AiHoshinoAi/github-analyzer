@@ -14,15 +14,16 @@ npm run dev
 - API: http://localhost:3100
 - Web: http://localhost:5174
 
-请复制 `.env.example` 为 `.env.local`（配置文件在项目的apps/api路径下） 或在系统环境中设置：
+请复制 `apps/api/.env.example` 为 `apps/api/.env.local`，或在系统环境中设置：
 ![](环境变量.png)
 - `GITHUB_TOKEN`: GitHub Personal Access Token，用于提升 API 限流额度
-- `LLM_BASE_URL`: OpenAI-compatible 本地 LLM 地址
-- `LLM_MODEL`: 默认 `qwen3.6-plus`
-- `LLM_API_KEY`: 如本地 LLM 需要鉴权则填写
-- `VITE_API_BASE_URL`: 前端直连 API 地址，默认 `http://localhost:3100`
+- `AI_PROVIDER`: 云端 AI Provider，支持 `openai-compatible` 或 `anthropic`
+- `AI_API_BASE_URL`: 云端 AI API 地址，例如 `https://api.openai.com/v1`
+- `AI_API_KEY`: 云端 AI API Key
+- `AI_MODEL`: 云端模型名称，例如 `gpt-4o-mini`
+- `AI_TIMEOUT_MS`: AI 请求超时时间，默认 `12000`
 
-未配置本地 LLM 或调用失败时，后端会自动使用规则评分降级，保证演示可用。
+如需前端直连指定 API 地址，可复制 `apps/web/.env.example` 为 `apps/web/.env.local` 并设置 `VITE_API_BASE_URL`。未配置云端 AI API 或调用失败时，后端会自动使用规则评分降级，保证演示可用。
 
 ## 常用命令
 
@@ -61,4 +62,4 @@ curl "http://localhost:3100/api/score-comment?url=https://github.com/vuejs/core"
 
 错误时返回 `[ERROR]` 标记，前端会自动降级到规则评分。
 
-未配置 LLM 或调用失败时，自动使用规则评分降级。
+未配置云端 AI API 或调用失败时，自动使用规则评分降级。
