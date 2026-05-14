@@ -16,12 +16,6 @@ npm run dev
 
 请复制 `apps/api/.env.example` 为 `apps/api/.env.local`，或在系统环境中设置：
 ![](环境变量.png)
-- `GITHUB_TOKEN`: GitHub Personal Access Token，用于提升 API 限流额度
-- `AI_PROVIDER`: 云端 AI Provider，支持 `openai-compatible` 或 `anthropic`
-- `AI_API_BASE_URL`: 云端 AI API 地址，例如 `https://api.openai.com/v1`
-- `AI_API_KEY`: 云端 AI API Key
-- `AI_MODEL`: 云端模型名称，例如 `gpt-4o-mini`
-- `AI_TIMEOUT_MS`: AI 请求超时时间，默认 `12000`
 
 如需前端直连指定 API 地址，可复制 `apps/web/.env.example` 为 `apps/web/.env.local` 并设置 `VITE_API_BASE_URL`。未配置云端 AI API 或调用失败时，后端会自动使用规则评分降级，保证演示可用。
 
