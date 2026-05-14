@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { createTimeoutSignal, getAiConfig, requestAiTextStream } from "../../../lib/ai";
+import type { AiMessage } from "../../../lib/ai";
+import { analyzeRepository } from "../../../lib/analysis";
+import type { AnalysisResult } from "../../../lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,21 +81,13 @@ export async function GET(request: Request) {
 
         timeout = createTimeoutSignal(Math.max(config.timeoutMs, 30000));
         upstreamAbort = combineAbortSignals([request.signal, streamAbort.signal, timeout.signal]);
+        const analysis = await analyzeRepository(url);
 
         let hasContent = false;
 
         for await (const chunk of requestAiTextStream(
           config,
-          [
-            {
-              role: "system",
-              content: "你是一位专业的开源项目分析师。请简洁地输出中文评语，不需要 markdown 格式。"
-            },
-            {
-              role: "user",
-              content: `请分析 GitHub 仓库: ${url}`
-            }
-          ],
+          buildAssessmentMessages(analysis),
           upstreamAbort.signal
         )) {
           hasContent = true;
@@ -169,6 +164,46 @@ function sendComment(comment: string, controller: ReadableStreamDefaultControlle
   } catch {
     return false;
   }
+}
+
+function buildAssessmentMessages(analysis: AnalysisResult): AiMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "你是一位专业的开源项目分析师。只能依据提供的后端 GitHub API 结构化数据输出中文综合评语。评分必须使用 payload.score.total，不要根据仓库名、知名度或外部知识重新打分；如果 payload.score.source 为 rules，需要说明评分来自规则降级。输出 2-4 句，包含主要优势和风险，不要 Markdown。"
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        repository: {
+          fullName: analysis.repository.fullName,
+          description: analysis.repository.description,
+          defaultBranch: analysis.repository.defaultBranch,
+          createdAt: analysis.repository.createdAt,
+          updatedAt: analysis.repository.updatedAt,
+          pushedAt: analysis.repository.pushedAt,
+          license: analysis.repository.license,
+          topics: analysis.repository.topics,
+          isArchived: analysis.repository.isArchived
+        },
+        metrics: analysis.metrics,
+        health: analysis.health,
+        languagesTop5: analysis.languages.slice(0, 5),
+        contributorsTop5: analysis.contributors.slice(0, 5).map((contributor) => ({
+          login: contributor.login,
+          contributions: contributor.contributions
+        })),
+        activityLast12Weeks: analysis.activity,
+        score: {
+          total: analysis.score.total,
+          source: analysis.score.source,
+          model: analysis.score.model,
+          dimensions: analysis.score.dimensions
+        }
+      })
+    }
+  ];
 }
 
 function combineAbortSignals(signals: AbortSignal[]): CombinedSignal {

@@ -27,10 +27,11 @@ export async function scoreRepository(input: ScoringInput): Promise<ScoreResult>
     };
   }
 
-  const hasAiScore = llmResult.score !== null;
+  const aiScore = normalizeLlmScore(llmResult.score, ruleScore);
+  const hasAiScore = aiScore !== null;
 
   return {
-    total: llmResult.score ?? ruleScore,
+    total: aiScore ?? ruleScore,
     dimensions,
     comment: llmResult.comment,
     source: hasAiScore ? "cloud" : "rules",
@@ -147,7 +148,7 @@ async function generateLlmComment(input: ScoringInput, dimensions: ScoreDimensio
         {
           role: "system",
           content:
-            "你是一位专业的开源项目分析师。请基于给定 GitHub 仓库数据输出 JSON，不要输出 Markdown。格式：{\"score\": 数字, \"comment\": \"中文评语\"}。"
+            "你是一位专业的开源项目分析师。你没有 Web 访问能力，只能基于用户提供的 GitHub API 结构化数据评分，不要根据项目名称、知名度或外部知识推断。ruleScore 是后端规则评分基准，score 应围绕 ruleScore 做小幅校准；如果证据不足以给出更可靠的 AI 分数，请返回 null。请输出 JSON，不要 Markdown，格式：{\"score\": 数字或 null, \"comment\": \"中文评语\"}。"
         },
         {
           role: "user",
@@ -213,6 +214,15 @@ function parseLlmJson(content: string): LlmResult {
       model: ""
     };
   }
+}
+
+function normalizeLlmScore(score: number | null, ruleScore: number): number | null {
+  if (score === null) {
+    return null;
+  }
+
+  const maxDeviation = 10;
+  return Math.abs(score - ruleScore) <= maxDeviation ? score : null;
 }
 
 function clamp(value: number): number {
