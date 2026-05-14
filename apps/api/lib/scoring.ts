@@ -27,12 +27,14 @@ export async function scoreRepository(input: ScoringInput): Promise<ScoreResult>
     };
   }
 
+  const hasAiScore = llmResult.score !== null;
+
   return {
     total: llmResult.score ?? ruleScore,
     dimensions,
     comment: llmResult.comment,
-    source: "cloud",
-    model: llmResult.model
+    source: hasAiScore ? "cloud" : "rules",
+    model: hasAiScore ? llmResult.model : null
   };
 }
 

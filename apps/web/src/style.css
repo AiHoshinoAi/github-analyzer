@@ -72,6 +72,42 @@ input {
     @apply mt-1 text-lg font-semibold text-ink;
   }
 
+  .assessment-heading {
+    @apply flex-col sm:flex-row;
+  }
+
+  .assessment-score {
+    @apply flex w-full items-center justify-between gap-3 rounded-md border border-line bg-slate-50 px-3 py-2 sm:w-auto sm:min-w-64;
+  }
+
+  .assessment-score-main {
+    @apply flex min-w-0 items-baseline gap-2;
+  }
+
+  .assessment-score-main span {
+    @apply shrink-0 text-xs font-semibold uppercase tracking-[0.06em] text-muted;
+  }
+
+  .assessment-score-main strong {
+    @apply text-2xl font-semibold leading-none;
+  }
+
+  .assessment-score-main small {
+    @apply ml-0.5 text-xs font-medium text-muted;
+  }
+
+  .assessment-score-status {
+    @apply max-w-36 text-right text-xs font-medium leading-5 text-success;
+  }
+
+  .assessment-score-fallback {
+    @apply border-amber-200 bg-amber-50;
+  }
+
+  .assessment-score-fallback .assessment-score-status {
+    @apply text-amber-800;
+  }
+
   .chart-shell {
     @apply mt-4 h-[320px] min-h-[320px] w-full;
   }

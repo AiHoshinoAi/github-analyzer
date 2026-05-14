@@ -22,7 +22,7 @@ import {
 import { computed, onUnmounted, ref } from "vue";
 import { analyzeRepository, fetchScoreComment } from "./api";
 import BaseChart from "./components/BaseChart.vue";
-import type { AnalysisResult } from "./types";
+import type { AnalysisResult, ScoreResult } from "./types";
 
 const repositoryUrl = ref("https://github.com/vuejs/core");
 const loading = ref(false);
@@ -314,6 +314,18 @@ function scoreColor(score: number): string {
   return "#c2414b";
 }
 
+function scoreSourceName(score: ScoreResult): string {
+  return score.source === "cloud" ? score.model ?? "云端 AI" : "规则评分";
+}
+
+function assessmentScoreTitle(score: ScoreResult): string {
+  return score.source === "cloud" ? "AI 评分" : "规则评分";
+}
+
+function assessmentScoreDescription(score: ScoreResult): string {
+  return score.source === "cloud" ? "AI 评分已生成" : "已降级为规则评分";
+}
+
 void runAnalyze();
 </script>
 
@@ -389,7 +401,7 @@ void runAnalyze();
               <h2 class="text-lg font-semibold text-ink">项目评分</h2>
             </div>
             <span class="rounded-md border border-line px-2 py-1 text-xs font-medium text-muted">
-              {{ result.score.source === "cloud" ? result.score.model ?? "云端 API" : "规则评分" }}
+              {{ scoreSourceName(result.score) }}
             </span>
           </div>
 
@@ -501,12 +513,21 @@ void runAnalyze();
       </section>
 
       <section v-if="result" class="workspace-panel">
-        <div class="panel-heading">
+        <div class="panel-heading assessment-heading">
           <div>
             <p class="section-kicker">Assessment</p>
             <h2>综合评语</h2>
           </div>
-          <Bot class="size-5 text-brand" />
+          <div class="assessment-score" :class="{ 'assessment-score-fallback': result.score.source !== 'cloud' }">
+            <Bot class="size-5 shrink-0 text-brand" />
+            <div class="assessment-score-main">
+              <span>{{ assessmentScoreTitle(result.score) }}</span>
+              <strong :style="{ color: scoreColor(result.score.total) }">
+                {{ result.score.total }}<small>/100</small>
+              </strong>
+            </div>
+            <p class="assessment-score-status">{{ assessmentScoreDescription(result.score) }}</p>
+          </div>
         </div>
 
         <!-- AI 评语加载状态 -->
